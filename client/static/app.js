@@ -7,6 +7,13 @@ let audioChunks = [];
 let recordingStartTime = null;
 let recordingTimerInterval = null;
 
+const getStoredMessages = () =>
+  JSON.parse(localStorage.getItem("cachedMessages") || "[]");
+
+const storeMessages = (messages) => {
+  localStorage.setItem("cachedMessages", JSON.stringify(messages));
+};
+
 const hashMessage = (message) => message.replace(/<[^>]*>/g, "").trim();
 
 const showNotification = (message) => {
@@ -57,71 +64,86 @@ const handleMediaChange = (event) => {
 const fetchMessages = async () => {
   try {
     const res = await fetch("/messages");
-    const messages = await res.json();
-    const messagesDiv = qid("messages");
+    const newMessages = await res.json();
+    const storedMessages = getStoredMessages();
 
-    const base64Img = /^data:image\/(png|jpeg|jpg|gif|svg\+xml);base64,/;
-    const base64Vid = /^data:video\/(mp4|webm|ogg);base64,/;
-    const base64Audio = /^data:audio\/(webm|ogg);base64,/;
-
-    const messagesHTML = messages
-      .map((msg) => {
-        const pfpMatch = msg.match(/<pfp>(.*?)<\/pfp>/);
-        const mediaMatch = msg.match(/<media>(.*?)<\/media>/);
-        const audioMatch = msg.match(/<audio>(.*?)<\/audio>/);
-
-        const messageTextRaw = msg
-          .replace(/<pfp>.*?<\/pfp>/, "")
-          .replace(/<media>.*?<\/media>/, "")
-          .replace(/<audio>.*?<\/audio>/, "")
-          .trim();
-
-        const messageText = DOMPurify.sanitize(messageTextRaw);
-
-        const profilePicSrc =
-          pfpMatch && base64Img.test(pfpMatch[1])
-            ? DOMPurify.sanitize(pfpMatch[1])
-            : "/static/default_pfp.jpg";
-
-        const profilePic = `<img src="${profilePicSrc}" class="profile-pic" alt="Profile Picture" />`;
-
-        let media = "";
-        if (mediaMatch) {
-          const src = DOMPurify.sanitize(mediaMatch[1]);
-          if (base64Img.test(src)) {
-            media = `<img src="${src}" class="media-img" alt="Media" onclick="openMediaModal('${src}', false)" />`;
-          } else if (base64Vid.test(src)) {
-            media = `<video class="media-video" controls onclick="openMediaModal('${src}', true)"><source src="${src}" type="video/mp4" />Your browser does not support video.</video>`;
-          }
-        }
-
-        if (audioMatch) {
-          const src = DOMPurify.sanitize(audioMatch[1]);
-          media = `<audio controls class="media-audio"><source src="${src}" type="audio/webm" />Your browser does not support the audio element.</audio>`;
-        }
-
-        showNotification(messageText || "New media message");
-
-        return `
-          <div class="message-row">
-            ${profilePic}
-            <div class="message-bubble">
-              ${messageText ? `<p>${messageText}</p>` : ""}
-              ${media}
-            </div>
-          </div>`;
-      })
-      .join("");
-
-    messagesDiv.innerHTML = DOMPurify.sanitize(messagesHTML, {
-      SAFE_FOR_JQUERY: true,
-      ADD_ATTR: ["onclick"],
+    const combinedMessages = [...storedMessages];
+    newMessages.forEach((msg) => {
+      if (!storedMessages.includes(msg)) {
+        combinedMessages.push(msg);
+      }
     });
 
-    messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: "smooth" });
+    storeMessages(combinedMessages);
+    renderMessages(combinedMessages);
   } catch (error) {
-    console.error("Failed to fetch messages:", error);
+    console.warn("Fetch failed, loading from local cache.");
+    renderMessages(getStoredMessages());
   }
+};
+
+const renderMessages = (messages) => {
+  const messagesDiv = qid("messages");
+
+  const base64Img = /^data:image\/(png|jpeg|jpg|gif|svg\+xml);base64,/;
+  const base64Vid = /^data:video\/(mp4|webm|ogg);base64,/;
+  const base64Audio = /^data:audio\/(webm|ogg);base64,/;
+
+  const messagesHTML = messages
+    .map((msg) => {
+      const pfpMatch = msg.match(/<pfp>(.*?)<\/pfp>/);
+      const mediaMatch = msg.match(/<media>(.*?)<\/media>/);
+      const audioMatch = msg.match(/<audio>(.*?)<\/audio>/);
+
+      const messageTextRaw = msg
+        .replace(/<pfp>.*?<\/pfp>/, "")
+        .replace(/<media>.*?<\/media>/, "")
+        .replace(/<audio>.*?<\/audio>/, "")
+        .trim();
+
+      const messageText = DOMPurify.sanitize(messageTextRaw);
+
+      const profilePicSrc =
+        pfpMatch && base64Img.test(pfpMatch[1])
+          ? DOMPurify.sanitize(pfpMatch[1])
+          : "/static/default_pfp.jpg";
+
+      const profilePic = `<img src="${profilePicSrc}" class="profile-pic" alt="Profile Picture" />`;
+
+      let media = "";
+      if (mediaMatch) {
+        const src = DOMPurify.sanitize(mediaMatch[1]);
+        if (base64Img.test(src)) {
+          media = `<img src="${src}" class="media-img" alt="Media" onclick="openMediaModal('${src}', false)" />`;
+        } else if (base64Vid.test(src)) {
+          media = `<video class="media-video" controls onclick="openMediaModal('${src}', true)"><source src="${src}" type="video/mp4" />Your browser does not support video.</video>`;
+        }
+      }
+
+      if (audioMatch) {
+        const src = DOMPurify.sanitize(audioMatch[1]);
+        media = `<audio controls class="media-audio"><source src="${src}" type="audio/webm" />Your browser does not support the audio element.</audio>`;
+      }
+
+      showNotification(messageText || "New media message");
+
+      return `
+        <div class="message-row">
+          ${profilePic}
+          <div class="message-bubble">
+            ${messageText ? `<p>${messageText}</p>` : ""}
+            ${media}
+          </div>
+        </div>`;
+    })
+    .join("");
+
+  messagesDiv.innerHTML = DOMPurify.sanitize(messagesHTML, {
+    SAFE_FOR_JQUERY: true,
+    ADD_ATTR: ["onclick"],
+  });
+
+  messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: "smooth" });
 };
 
 const sendMessage = async () => {
@@ -140,6 +162,12 @@ const sendMessage = async () => {
 
   input.value = "";
   fetchMessages();
+};
+
+const clearCachedMessages = () => {
+    localStorage.removeItem("cachedMessages");
+    cachedMessages = [];
+    renderMessages([]);
 };
 
 const toggleSettings = () => {
@@ -195,7 +223,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   requestNotificationPermission();
-  fetchMessages();
+  renderMessages(getStoredMessages());  
+  fetchMessages();                      
   setInterval(fetchMessages, 3000);
 });
 
