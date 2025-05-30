@@ -1,5 +1,6 @@
 use crate::{encrypt_data, pad_message, receive_and_fetch_messages, send_encrypted_message};
 use std::{
+    collections::VecDeque,
     path::PathBuf,
     sync::{mpsc::channel, Arc, Mutex},
     thread,
@@ -15,7 +16,7 @@ pub struct MessagingApp {
     pub shared_hybrid_secret: Arc<String>,
     pub shared_room_id: Arc<Mutex<String>>,
     pub shared_url: Arc<Mutex<String>>,
-    pub messages: Arc<Mutex<Vec<String>>>,
+    pub messages: Arc<Mutex<VecDeque<String>>>,
 }
 
 impl MessagingApp {
@@ -30,7 +31,7 @@ impl MessagingApp {
             shared_hybrid_secret,
             shared_room_id,
             shared_url,
-            messages: Arc::new(Mutex::new(Vec::new())),
+            messages: Arc::new(Mutex::new(VecDeque::with_capacity(1000))),
         }
     }
 }
@@ -47,12 +48,11 @@ pub fn run_gui(app: MessagingApp) -> eframe::Result<()> {
 struct EguiApp {
     input: String,
     sender: std::sync::mpsc::Sender<String>,
-    messages: Arc<Mutex<Vec<String>>>,
+    messages: Arc<Mutex<VecDeque<String>>>,
     background_color: Color32,
     background_texture: Option<TextureHandle>,
     wallpaper_path: Option<PathBuf>,
     show_settings: bool,
-    visible_start: usize,
     visible_batch_size: usize,
 }
 
@@ -73,7 +73,10 @@ impl EguiApp {
                 if let Ok(encrypted) = encrypt_data(&padded, secret) {
                     if send_encrypted_message(&encrypted, &room_id, &url).is_ok() {
                         let mut msgs = send_messages.lock().unwrap();
-                        msgs.push(formatted);
+                        msgs.push_back(formatted);
+                        if msgs.len() > 1000 {
+                            msgs.pop_front();
+                        }
                     }
                 }
             }
@@ -90,14 +93,11 @@ impl EguiApp {
                 let mut msgs = messages_thread.lock().unwrap();
                 for msg in new_msgs {
                     if !msgs.contains(&msg) {
-                        msgs.push(msg);
+                        msgs.push_back(msg);
+                        if msgs.len() > 1000 {
+                            msgs.pop_front();
+                        }
                     }
-                }
-
-                const MAX_CACHE_SIZE: usize = 1000;
-                if msgs.len() > MAX_CACHE_SIZE {
-                    let drain_count = msgs.len() - MAX_CACHE_SIZE;
-                    msgs.drain(0..drain_count);
                 }
             }
 
@@ -112,7 +112,6 @@ impl EguiApp {
             background_texture: None,
             wallpaper_path: None,
             show_settings: false,
-            visible_start: 0,
             visible_batch_size: 50,
         }
     }
@@ -186,11 +185,14 @@ impl eframe::App for EguiApp {
                     );
                 }
 
-                let messages = self.messages.lock().unwrap().clone();
-                let total_messages = messages.len();
-                let visible_end = total_messages;
-                let visible_start = self.visible_start.min(visible_end);
-                let visible_messages = &messages[visible_start..visible_end];
+                let messages_guard = self.messages.lock().unwrap();
+                let total_messages = messages_guard.len();
+                let visible_start = total_messages.saturating_sub(self.visible_batch_size);
+                let visible_messages: Vec<_> = messages_guard
+                    .iter()
+                    .skip(visible_start)
+                    .cloned()
+                    .collect();
 
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
@@ -212,7 +214,7 @@ impl eframe::App for EguiApp {
                                 .inner_margin(egui::vec2(8.0, 4.0))
                                 .show(ui, |ui| {
                                     ui.label(
-                                        parse_html_message(msg)
+                                        parse_html_message(&msg)
                                             .font(egui::FontId::monospace(15.0)),
                                     );
                                 });
@@ -261,8 +263,6 @@ impl eframe::App for EguiApp {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             } else {
                                 let _ = self.sender.send(trimmed.to_string());
-                                let total = self.messages.lock().unwrap().len();
-                                self.visible_start = total.saturating_sub(self.visible_batch_size);
                             }
                             self.input.clear();
                         }

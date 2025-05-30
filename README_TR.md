@@ -67,7 +67,7 @@ Amnezichat, hiçbir kayıt tutulmamasını ve tüm mesaj verilerinin yalnızca s
     sudo apt install curl build-essential git tor xterm
     sudo systemctl enable --now tor.service
     curl https://sh.rustup.rs -sSf | sh -s -- -y
-    git clone https://git.disroot.org/UmutCamliyurt/Amnezichat.git
+    git clone https://git.disroot.org/Amnezichat/Amnezichat.git
     cd Amnezichat/client/
     cargo build --release
     cargo run --release
@@ -76,7 +76,7 @@ Amnezichat, hiçbir kayıt tutulmamasını ve tüm mesaj verilerinin yalnızca s
 
     sudo apt update
     sudo apt install docker.io git
-    git clone https://git.disroot.org/UmutCamliyurt/Amnezichat.git
+    git clone https://git.disroot.org/Amnezichat/Amnezichat.git
     cd Amnezichat/client/
     docker build --network=host -t amnezichat .
     xhost +local:docker
@@ -101,9 +101,8 @@ Amnezichat, hiçbir kayıt tutulmamasını ve tüm mesaj verilerinin yalnızca s
 
 **Amnezichat** kaynak koduna birden fazla yedek (ayna) depo üzerinden erişebilirsiniz:
 
-- 🔗 **[Ana Depo (Disroot)](https://git.disroot.org/UmutCamliyurt/Amnezichat)**
-- 🔗 **[Codeberg Aynası](https://codeberg.org/umutcamliyurt/Amnezichat)**
-- 🔗 **[GitHub Aynası](https://github.com/umutcamliyurt/Amnezichat)**
+- 🔗 **[Ana Depo (Disroot)](https://git.disroot.org/Amnezichat/Amnezichat)**
+- 🔗 **[GitHub Aynası](https://github.com/Amnezichat/Amnezichat)**
 
 <!-- LİSANS -->
 ## Lisans
