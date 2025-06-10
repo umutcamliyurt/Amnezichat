@@ -7,8 +7,14 @@ use std::{
     time::Duration,
 };
 
-use eframe::egui;
-use egui::{Color32, TextureHandle};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use eframe::egui::{self, Color32, TextureHandle};
+use egui::{RichText, Ui};
+
+fn encode_file_to_base64(path: &PathBuf) -> Option<String> {
+    std::fs::read(path).ok().map(|bytes| STANDARD.encode(&bytes))
+}
 
 #[derive(Clone)]
 pub struct MessagingApp {
@@ -54,6 +60,8 @@ struct EguiApp {
     wallpaper_path: Option<PathBuf>,
     show_settings: bool,
     visible_batch_size: usize,
+    selected_pfp_base64: Option<String>,
+    selected_media_base64: Option<String>,
 }
 
 impl EguiApp {
@@ -113,6 +121,8 @@ impl EguiApp {
             wallpaper_path: None,
             show_settings: false,
             visible_batch_size: 50,
+            selected_pfp_base64: None,
+            selected_media_base64: None,
         }
     }
 
@@ -147,7 +157,7 @@ impl eframe::App for EguiApp {
         if self.show_settings {
             egui::Window::new("Settings")
                 .collapsible(true)
-                .default_size((320.0, 160.0))
+                .default_size((320.0, 200.0))
                 .show(ctx, |ui| {
                     ui.label("Background Color:");
                     ui.color_edit_button_srgba(&mut self.background_color);
@@ -164,6 +174,23 @@ impl eframe::App for EguiApp {
                     if ui.button("Clear Wallpaper").clicked() {
                         self.background_texture = None;
                         self.wallpaper_path = None;
+                    }
+
+                    ui.separator();
+                    ui.label("Profile Picture:");
+                    if ui.button("Select Profile Picture").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Image", &["png", "jpg", "jpeg", "bmp"])
+                            .pick_file()
+                        {
+                            self.selected_pfp_base64 = encode_file_to_base64(&path);
+                        }
+                    }
+
+                    if self.selected_pfp_base64.is_some() {
+                        ui.label("Profile picture selected.");
+                    } else {
+                        ui.label("No profile picture selected.");
                     }
                 });
         }
@@ -213,10 +240,7 @@ impl eframe::App for EguiApp {
                                 .rounding(egui::Rounding::same(8.0))
                                 .inner_margin(egui::vec2(8.0, 4.0))
                                 .show(ui, |ui| {
-                                    ui.label(
-                                        parse_html_message(&msg)
-                                            .font(egui::FontId::monospace(15.0)),
-                                    );
+                                    parse_html_message_with_widgets(ui, &msg, ctx);
                                 });
                         }
 
@@ -226,10 +250,21 @@ impl eframe::App for EguiApp {
 
         egui::TopBottomPanel::bottom("bottom_panel")
             .resizable(false)
-            .default_height(60.0)
+            .default_height(90.0)
             .show(ctx, |ui| {
                 ui.separator();
                 ui.add_space(6.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("\u{1F5BC} Image").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Image", &["png", "jpg", "jpeg", "bmp"])
+                            .pick_file()
+                        {
+                            self.selected_media_base64 = encode_file_to_base64(&path);
+                        }
+                    }
+                });
 
                 ui.horizontal(|ui| {
                     let available_width = ui.available_width() - 100.0;
@@ -259,10 +294,19 @@ impl eframe::App for EguiApp {
                     if send_clicked || enter_pressed {
                         let trimmed = self.input.trim();
                         if !trimmed.is_empty() {
-                            if trimmed.eq_ignore_ascii_case("exit") {
+                            let mut composed = trimmed.to_string();
+
+                            if let Some(pfp) = &self.selected_pfp_base64 {
+                                composed.push_str(&format!(" <pfp>{}</pfp>", pfp));
+                            }
+                            if let Some(media) = self.selected_media_base64.take() {
+                                composed.push_str(&format!(" <media>{}</media>", media));
+                            }
+
+                            if composed.eq_ignore_ascii_case("exit") {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             } else {
-                                let _ = self.sender.send(trimmed.to_string());
+                                let _ = self.sender.send(composed);
                             }
                             self.input.clear();
                         }
@@ -274,27 +318,72 @@ impl eframe::App for EguiApp {
     }
 }
 
-fn parse_html_message(msg: &str) -> egui::RichText {
-    let mut cleaned_msg = msg.to_string();
+fn decode_base64_to_image(ctx: &egui::Context, tag: &str, b64: &str) -> Option<TextureHandle> {
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    let size = [image.width() as usize, image.height() as usize];
+    let pixels = image.as_flat_samples();
+    Some(ctx.load_texture(
+        format!("{}_image", tag),
+        egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice()),
+        egui::TextureOptions::LINEAR,
+    ))
+}
 
-    for tag in &["media", "audio", "pfp"] {
-        while let Some(start) = cleaned_msg.find(&format!("<{}>", tag)) {
-            if let Some(end) = cleaned_msg[start..].find(&format!("</{}>", tag)) {
-                let end = start + end + tag.len() + 3;
-                cleaned_msg.replace_range(start..end, "");
+fn parse_html_message_with_widgets(ui: &mut Ui, msg: &str, ctx: &egui::Context) {
+    let mut remaining = msg.to_string();
+
+    if let (Some(start), Some(end)) = (remaining.find("<strong>"), remaining.find("</strong>")) {
+        if end > start {
+            let bold_text = &remaining[start + 8..end];
+            ui.label(RichText::new(bold_text).strong());
+            remaining = remaining[end + 9..].to_string();
+    
+            if remaining.starts_with(": ") {
+                remaining = remaining[2..].to_string();
+            } else if remaining.starts_with(':') {
+                remaining = remaining[1..].to_string();
+            }
+        }
+    }    
+
+    let max_pfp_size = egui::Vec2::new(32.0, 32.0);
+    let max_media_size = egui::Vec2::new(400.0, 300.0);
+
+    while let Some(start) = remaining.find('<') {
+        if let Some(end) = remaining[start..].find('>') {
+            let end = start + end;
+            let tag = &remaining[start + 1..end];
+            let close_tag = format!("</{}>", tag);
+            if let Some(close_start) = remaining[end + 1..].find(&close_tag) {
+                let content_start = end + 1;
+                let content_end = end + 1 + close_start;
+                let content = &remaining[content_start..content_end];
+
+                match tag {
+                    "media" | "pfp" => {
+                        if let Some(tex) = decode_base64_to_image(ctx, tag, content) {
+                            let size = tex.size_vec2();
+                            let max_size = if tag == "pfp" { max_pfp_size } else { max_media_size };
+                            let scale = (max_size.x / size.x).min(max_size.y / size.y).min(1.0);
+                            let scaled_size = size * scale;
+                            let (rect, _) = ui.allocate_exact_size(scaled_size, egui::Sense::hover());
+                            ui.painter().image(tex.id(), rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)), Color32::WHITE);
+                        }
+                    }
+                    _ => {}
+                }
+
+                remaining.replace_range(start..(content_end + close_tag.len()), "");
             } else {
                 break;
             }
+        } else {
+            break;
         }
     }
 
-    if let (Some(start), Some(end)) = (cleaned_msg.find("<strong>"), cleaned_msg.find("</strong>")) {
-        if end > start + 8 {
-            let bold_text = &cleaned_msg[start + 8..end];
-            let rest = &cleaned_msg[end + 9..];
-            return egui::RichText::new(format!("{}{}", bold_text, rest)).strong();
-        }
+    if !remaining.trim().is_empty() {
+        ui.label(RichText::new(remaining.trim()).monospace());
     }
-
-    egui::RichText::new(cleaned_msg)
 }
